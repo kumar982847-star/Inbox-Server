@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-0 \
     libgbm-dev \
     libnss3 \
-    libatk-bridge2.0-0 \
     libxkbcommon0 \
     libasound2 \
     libatk1.0-0 \
