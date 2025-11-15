@@ -29,7 +29,6 @@ def send_message(
     messages: str = Form(...),
     delay: int = Form(0)
 ):
-
     try:
         cookies_list = json.loads(cookies)
     except Exception as e:
@@ -46,45 +45,51 @@ def send_message(
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled"
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars"
                 ]
             )
 
             context = browser.new_context()
-
-            # Add cookies
             context.add_cookies(cookies_list)
 
             page = context.new_page()
 
-            # Open chat
+            # Open chat page
             page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
 
-            # MAIN SELECTORS FOR FB & E2EE
+            # -----------------------------
+            #   FIXED E2EE MESSAGE BOX SELECTORS
+            # -----------------------------
             selectors = [
-                '[aria-label="Message"]',
-                'div[role="textbox"]',
-                'textarea[aria-label="Message"]'
+                'div[aria-label="Message"][contenteditable="true"]',
+                'div[role="textbox"][contenteditable="true"]',
+                'div[role="textbox"][data-lexical-editor="true"]',
+                'div[contenteditable="true"][data-lexical-editor="true"]',
             ]
 
             message_box = None
 
             for sel in selectors:
                 try:
-                    page.wait_for_selector(sel, timeout=8000)
+                    page.wait_for_selector(sel, timeout=10000)
                     message_box = sel
                     break
                 except PlayTimeout:
-                    pass
+                    continue
 
+            # If still not found → E2EE has not loaded or cookies invalid
             if not message_box:
                 return HTMLResponse(
-                    content="<b>Error:</b> Message box not found. Probably E2EE protected chat.",
+                    content="<b>Error:</b> Message box not found. Chat is E2EE or cookies invalid.",
                     status_code=500
                 )
 
-            # Send messages line by line
+            # -----------------------------
+            #   SEND MESSAGES
+            # -----------------------------
             for msg in messages.splitlines():
+                page.click(message_box)
                 page.fill(message_box, msg)
                 page.keyboard.press("Enter")
                 time.sleep(delay)
