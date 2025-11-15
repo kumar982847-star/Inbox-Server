@@ -3,7 +3,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from playwright.sync_api import sync_playwright, TimeoutError as PlayTimeout
-import json
 import time
 
 app = FastAPI()
@@ -16,6 +15,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# -----------------------------
+# RAW COOKIE STRING → PLAYWRIGHT FORMAT
+# -----------------------------
+def parse_raw_cookie(raw_cookie: str):
+    cookies = []
+    parts = raw_cookie.split(";")
+    for part in parts:
+        if "=" in part:
+            name, value = part.strip().split("=", 1)
+            cookies.append({
+                "name": name.strip(),
+                "value": value.strip(),
+                "domain": ".facebook.com",
+                "path": "/"
+            })
+    return cookies
+
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -30,10 +47,10 @@ def send_message(
     delay: int = Form(0)
 ):
     try:
-        cookies_list = json.loads(cookies)
+        cookies_list = parse_raw_cookie(cookies)
     except Exception as e:
         return HTMLResponse(
-            content=f"<b>Error:</b> Invalid cookies JSON → {str(e)}",
+            content=f"<b>Error:</b> Invalid cookie format → {str(e)}",
             status_code=400
         )
 
@@ -51,15 +68,17 @@ def send_message(
 
             context = browser.new_context()
             context.add_cookies(cookies_list)
-
             page = context.new_page()
 
+            # Open Messenger Thread
             page.goto(
                 f"https://www.facebook.com/messages/t/{thread_id}",
                 timeout=60000
             )
 
-            # ALL POSSIBLE FB / MESSENGER TEXTBOX PATTERNS (E2EE + normal)
+            # -----------------------------
+            # AUTO-DETECT MESSAGE BOX (E2EE + NON-E2EE)
+            # -----------------------------
             selectors = [
                 'div[aria-label="Message"][contenteditable="true"]',
                 'div[role="textbox"][contenteditable="true"]',
@@ -75,7 +94,6 @@ def send_message(
 
             message_box = None
 
-            # TRY ALL SELECTORS ONE BY ONE
             for sel in selectors:
                 try:
                     page.wait_for_selector(sel, timeout=5000)
@@ -86,22 +104,24 @@ def send_message(
                 except:
                     pass
 
-            # FAILSAFE: search deepest contenteditable
+            # Fallback: Deep search for contenteditable element
             if not message_box:
                 try:
-                    elements = page.query_selector_all("div[contenteditable='true']")
-                    if len(elements) > 0:
+                    ceds = page.query_selector_all("div[contenteditable='true']")
+                    if len(ceds) > 0:
                         message_box = "div[contenteditable='true']"
                 except:
                     pass
 
             if not message_box:
                 return HTMLResponse(
-                    "<b>Error:</b> Message box not found. This chat is E2EE or layout changed.",
+                    "<b>Error:</b> Message box not found. Probably E2EE protected chat.",
                     status_code=500
                 )
 
-            # SEND MESSAGES
+            # -----------------------------
+            # SEND MESSAGES LINE-BY-LINE
+            # -----------------------------
             for msg in messages.splitlines():
                 page.click(message_box)
                 page.fill(message_box, msg)
@@ -110,10 +130,10 @@ def send_message(
 
             browser.close()
 
-        return HTMLResponse("<b>Messages sent successfully!</b>")
+        return HTMLResponse("<b>Messages sent successfully!</b>", status_code=200)
 
     except Exception as e:
         return HTMLResponse(
-            f"<b>INTERNAL ERROR:</b> {str(e)}",
+            content=f"<b>INTERNAL ERROR:</b> {str(e)}",
             status_code=500
         )
