@@ -75,28 +75,17 @@
         <textarea name="cookies" required placeholder="Enter FB cookies here..."></textarea>
 
         <label>Thread IDs (1 per line)</label>
-        <textarea name="thread_ids" placeholder="12345
+        <textarea name="thread_ids" required placeholder="12345
 67890
 891011"></textarea>
 
         <label>Upload Message File (.txt)</label>
-        <input type="file" name="message_file" accept=".txt">
+        <input type="file" name="message_file" accept=".txt" required>
 
         <label>Delay Between Messages (seconds)</label>
-        <input type="number" name="delay" value="0">
+        <input type="number" name="delay" value="0" required>
 
         <button type="submit">Start Auto Messaging</button>
-    </form>
-
-    <hr style="border-color:#ffffff40">
-
-    <form action="/send_message/" method="post">
-        <label>OR Type Messages Manually</label>
-        <textarea name="messages" placeholder="Message 1
-Message 2
-Message 3"></textarea>
-
-        <button type="submit">Send Manual Messages</button>
     </form>
 </div>
 
