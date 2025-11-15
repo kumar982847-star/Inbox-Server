@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
+
 from playwright.sync_api import sync_playwright, TimeoutError
 import time
 
@@ -16,9 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------------------
-# RAW COOKIE STRING → PLAYWRIGHT FORMAT
-# ------------------------------------
+# ---------------------------------------------------------
+# PARSE RAW COOKIES
+# ---------------------------------------------------------
 def parse_raw_cookie(raw_cookie: str):
     cookies = []
     for part in raw_cookie.split(";"):
@@ -34,18 +35,44 @@ def parse_raw_cookie(raw_cookie: str):
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+# ---------------------------------------------------------
+# SEND MESSAGES WITH FILE UPLOAD + INFINITE LOOP + MULTI THREADS
+# ---------------------------------------------------------
 @app.post("/send_message/")
-def send_message(cookies: str = Form(...), thread_id: str = Form(...),
-                 messages: str = Form(...), delay: int = Form(0)):
+def send_message(
+    cookies: str = Form(...),
+    thread_ids: str = Form(...),       # MULTI THREAD IDS
+    delay: int = Form(0),
+    file: UploadFile = File(...)
+):
+    # ----------------------------
+    # Read uploaded TXT file
+    # ----------------------------
+    try:
+        content = file.file.read().decode('utf-8')
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+    except:
+        return HTMLResponse("<b>Error parsing file!</b>", status_code=400)
 
+    # ----------------------------
+    # Prepare thread list
+    # ----------------------------
+    threads = [tid.strip() for tid in thread_ids.split(",") if tid.strip()]
+
+    if len(threads) == 0:
+        return HTMLResponse("<b>Error:</b> No valid thread IDs found.", status_code=400)
+
+    # ----------------------------
+    # Parse Cookies
+    # ----------------------------
     try:
         cookies_list = parse_raw_cookie(cookies)
     except Exception as e:
-        return HTMLResponse(f"Invalid Cookie Format → {e}", status_code=400)
+        return HTMLResponse(f"<b>Invalid Cookie Format →</b> {e}", status_code=400)
 
     try:
         with sync_playwright() as p:
@@ -56,7 +83,6 @@ def send_message(cookies: str = Form(...), thread_id: str = Form(...),
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-infobars",
                     "--disable-notifications",
                 ]
             )
@@ -65,44 +91,9 @@ def send_message(cookies: str = Form(...), thread_id: str = Form(...),
             context.add_cookies(cookies_list)
             page = context.new_page()
 
-            # -----------------------------
-            # OPEN CHAT
-            # -----------------------------
-            page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
-
-            # -----------------------------
-            # POSSIBLE MESSAGE BOX SELECTORS
-            # -----------------------------
-            candidates = [
-                "div[role='textbox'][contenteditable='true']",
-                "div[aria-label='Message'][contenteditable='true']",
-                "div[data-lexical-editor='true']",
-                "div[contenteditable='true']",
-                "textarea",
-            ]
-
-            message_box = None
-
-            # FIND WORKING SELECTOR
-            for sel in candidates:
-                try:
-                    page.wait_for_selector(sel, timeout=5000)
-                    element = page.query_selector(sel)
-                    if element:
-                        message_box = sel
-                        break
-                except TimeoutError:
-                    pass
-
-            if not message_box:
-                return HTMLResponse(
-                    "<b>Error:</b> Message box not found (Maybe E2EE chat).",
-                    status_code=500
-                )
-
-            # -----------------------------
-            # SAFE CLICK (BYPASS OVERLAY)
-            # -----------------------------
+            # ---------------------------------------------------
+            # SAFE CLICK FUNCTION
+            # ---------------------------------------------------
             def safe_click(selector):
                 for _ in range(10):
                     try:
@@ -113,17 +104,50 @@ def send_message(cookies: str = Form(...), thread_id: str = Form(...),
                         time.sleep(0.2)
                 return False
 
-            # -----------------------------
-            # SEND MESSAGES
-            # -----------------------------
-            for line in messages.splitlines():
-                safe_click(message_box)
-                page.fill(message_box, line)
-                page.keyboard.press("Enter")
-                time.sleep(delay)
+            # ---------------------------------------------------
+            # INFINITE LOOP STARTS HERE
+            # ---------------------------------------------------
+            while True:
+                for thread_id in threads:
 
-            browser.close()
-            return HTMLResponse("<b>Messages Sent Successfully!</b>", status_code=200)
+                    # OPEN CHAT THREAD
+                    try:
+                        page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
+                    except:
+                        continue  # skip if thread not loading
+
+                    # FIND MESSAGE BOX
+                    selectors = [
+                        "div[role='textbox'][contenteditable='true']",
+                        "div[aria-label='Message'][contenteditable='true']",
+                        "div[data-lexical-editor='true']",
+                        "div[contenteditable='true']",
+                        "textarea",
+                    ]
+
+                    message_box = None
+                    for sel in selectors:
+                        try:
+                            page.wait_for_selector(sel, timeout=5000)
+                            message_box = sel
+                            break
+                        except:
+                            pass
+
+                    if not message_box:
+                        continue  # skip E2EE chats
+
+                    # SEND FILE LINES
+                    for msg in lines:
+                        safe_click(message_box)
+                        page.fill(message_box, msg)
+                        page.keyboard.press("Enter")
+                        time.sleep(delay)
+
+                # LOOP COMPLETE → START AGAIN (INFINITE)
+                time.sleep(1)
 
     except Exception as e:
         return HTMLResponse(f"<b>INTERNAL ERROR:</b> {e}", status_code=500)
+
+    return HTMLResponse("<b>Messages started in infinite loop!</b>", status_code=200)
