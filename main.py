@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 
-from playwright.sync_api import sync_playwright, TimeoutError
+from playwright.sync_api import sync_playwright
 import time
 
 app = FastAPI()
@@ -17,9 +17,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------------
-# PARSE RAW COOKIES
-# ------------------------------
 def parse_raw_cookie(raw_cookie: str):
     cookies = []
     for part in raw_cookie.split(";"):
@@ -39,37 +36,29 @@ def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# ---------------------------------------------------------
-# FINAL FIXED ROUTE (MATCHES YOUR HTML)
-# ---------------------------------------------------------
 @app.post("/send_message_file/")
 def send_message_file(
     cookies: str = Form(...),
-    thread_ids: str = Form(...),
+    thread_ids: str = Form(""),
     delay: int = Form(0),
     message_file: UploadFile = File(...)
 ):
-
     # Read TXT file
     try:
-        content = message_file.file.read().decode("utf-8")
+        content = message_file.file.read().decode('utf-8')
         lines = [line.strip() for line in content.splitlines() if line.strip()]
     except:
-        return HTMLResponse("<b>Error reading file!</b>", status_code=400)
+        return HTMLResponse("<b>Error parsing file!</b>", status_code=400)
 
     # Thread list
     threads = [tid.strip() for tid in thread_ids.splitlines() if tid.strip()]
 
     if len(threads) == 0:
-        return HTMLResponse("<b>No valid thread IDs found!</b>", status_code=400)
+        return HTMLResponse("<b>Error:</b> No valid thread IDs found.", status_code=400)
 
-    # Parse cookies
-    try:
-        cookies_list = parse_raw_cookie(cookies)
-    except Exception as e:
-        return HTMLResponse(f"<b>Cookie error:</b> {e}", status_code=400)
+    # Parse Cookies
+    cookies_list = parse_raw_cookie(cookies)
 
-    # Playwright automation
     try:
         with sync_playwright() as p:
 
@@ -87,9 +76,18 @@ def send_message_file(
             context.add_cookies(cookies_list)
             page = context.new_page()
 
-            # Infinite Loop
-            while True:
+            def safe_click(selector):
+                for _ in range(10):
+                    try:
+                        page.evaluate("el => el.scrollIntoView()", page.query_selector(selector))
+                        page.click(selector, force=True)
+                        return True
+                    except:
+                        time.sleep(0.2)
+                return False
 
+            # Infinite loop
+            while True:
                 for thread_id in threads:
 
                     # Open chat
@@ -98,17 +96,16 @@ def send_message_file(
                     except:
                         continue
 
-                    # Find message box
+                    # Message box selectors
                     selectors = [
-                        "div[aria-label='Message'][contenteditable='true']",
                         "div[role='textbox'][contenteditable='true']",
+                        "div[aria-label='Message'][contenteditable='true']",
                         "div[data-lexical-editor='true']",
                         "div[contenteditable='true']",
                         "textarea",
                     ]
 
                     message_box = None
-
                     for sel in selectors:
                         try:
                             page.wait_for_selector(sel, timeout=5000)
@@ -118,19 +115,18 @@ def send_message_file(
                             pass
 
                     if not message_box:
-                        continue  # Skip E2EE threads
+                        continue
 
-                    # Send all lines
+                    # Send messages
                     for msg in lines:
-                        page.click(message_box)
+                        safe_click(message_box)
                         page.fill(message_box, msg)
                         page.keyboard.press("Enter")
                         time.sleep(delay)
 
-                # Loop forever
                 time.sleep(1)
 
     except Exception as e:
-        return HTMLResponse(f"<b>Internal Error:</b> {e}", status_code=500)
+        return HTMLResponse(f"<b>INTERNAL ERROR:</b> {e}", status_code=500)
 
-    return HTMLResponse("<b>Started Infinite Auto Messaging!</b>")
+    return HTMLResponse("<b>Messages started in infinite loop!</b>")
