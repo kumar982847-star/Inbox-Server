@@ -45,8 +45,7 @@ def send_message(
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-infobars"
+                    "--disable-blink-features=AutomationControlled"
                 ]
             )
 
@@ -55,39 +54,54 @@ def send_message(
 
             page = context.new_page()
 
-            # Open chat page
-            page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
+            page.goto(
+                f"https://www.facebook.com/messages/t/{thread_id}",
+                timeout=60000
+            )
 
-            # -----------------------------
-            #   FIXED E2EE MESSAGE BOX SELECTORS
-            # -----------------------------
+            # ALL POSSIBLE FB / MESSENGER TEXTBOX PATTERNS (E2EE + normal)
             selectors = [
                 'div[aria-label="Message"][contenteditable="true"]',
                 'div[role="textbox"][contenteditable="true"]',
-                'div[role="textbox"][data-lexical-editor="true"]',
+                'div[role="textbox"]',
                 'div[contenteditable="true"][data-lexical-editor="true"]',
+                'div[data-lexical-editor="true"]',
+                'div[aria-label="Type a message…"]',
+                'div[aria-label="Type a message"]',
+                'div[aria-label="Aa"]',
+                'div[contenteditable="true"]',
+                'textarea',
             ]
 
             message_box = None
 
+            # TRY ALL SELECTORS ONE BY ONE
             for sel in selectors:
                 try:
-                    page.wait_for_selector(sel, timeout=10000)
-                    message_box = sel
-                    break
-                except PlayTimeout:
-                    continue
+                    page.wait_for_selector(sel, timeout=5000)
+                    element = page.query_selector(sel)
+                    if element:
+                        message_box = sel
+                        break
+                except:
+                    pass
 
-            # If still not found → E2EE has not loaded or cookies invalid
+            # FAILSAFE: search deepest contenteditable
+            if not message_box:
+                try:
+                    elements = page.query_selector_all("div[contenteditable='true']")
+                    if len(elements) > 0:
+                        message_box = "div[contenteditable='true']"
+                except:
+                    pass
+
             if not message_box:
                 return HTMLResponse(
-                    content="<b>Error:</b> Message box not found. Chat is E2EE or cookies invalid.",
+                    "<b>Error:</b> Message box not found. This chat is E2EE or layout changed.",
                     status_code=500
                 )
 
-            # -----------------------------
-            #   SEND MESSAGES
-            # -----------------------------
+            # SEND MESSAGES
             for msg in messages.splitlines():
                 page.click(message_box)
                 page.fill(message_box, msg)
@@ -96,10 +110,10 @@ def send_message(
 
             browser.close()
 
-        return HTMLResponse("<b>Messages sent successfully!</b>", status_code=200)
+        return HTMLResponse("<b>Messages sent successfully!</b>")
 
     except Exception as e:
         return HTMLResponse(
-            content=f"<b>INTERNAL ERROR:</b> {str(e)}",
+            f"<b>INTERNAL ERROR:</b> {str(e)}",
             status_code=500
         )
