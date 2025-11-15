@@ -4,7 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 
 from playwright.sync_api import sync_playwright
+import threading
 import time
+import random
+import string
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -16,6 +19,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------
+# GLOBAL TASK MANAGER
+# ---------------------------
+TASKS = {}   # { task_id: {"running": True, "thread": thread_object} }
+
+
+def generate_task_id():
+    return ''.join(random.choices(string.digits, k=6))
+
 
 def parse_raw_cookie(raw_cookie: str):
     cookies = []
@@ -31,49 +44,21 @@ def parse_raw_cookie(raw_cookie: str):
     return cookies
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-@app.post("/send_message_file/")
-def send_message_file(
-    cookies: str = Form(...),
-    thread_ids: str = Form(""),
-    delay: int = Form(0),
-    message_file: UploadFile = File(...)
-):
-    # Read TXT file
-    try:
-        content = message_file.file.read().decode('utf-8')
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-    except:
-        return HTMLResponse("<b>Error parsing file!</b>", status_code=400)
-
-    # Thread list
-    threads = [tid.strip() for tid in thread_ids.splitlines() if tid.strip()]
-
-    if len(threads) == 0:
-        return HTMLResponse("<b>Error:</b> No valid thread IDs found.", status_code=400)
-
-    # Parse Cookies
-    cookies_list = parse_raw_cookie(cookies)
+# --------------------------------------
+# RUNNER FUNCTION (runs in background)
+# --------------------------------------
+def run_sender(task_id, cookies, threads, lines, delay):
 
     try:
         with sync_playwright() as p:
 
             browser = p.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-notifications",
-                ]
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
             )
 
             context = browser.new_context()
-            context.add_cookies(cookies_list)
+            context.add_cookies(parse_raw_cookie(cookies))
             page = context.new_page()
 
             def safe_click(selector):
@@ -86,17 +71,16 @@ def send_message_file(
                         time.sleep(0.2)
                 return False
 
-            # Infinite loop
-            while True:
+            # infinite loop
+            while TASKS[task_id]["running"]:
+
                 for thread_id in threads:
 
-                    # Open chat
-                    try:
-                        page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
-                    except:
-                        continue
+                    if not TASKS[task_id]["running"]:
+                        break
 
-                    # Message box selectors
+                    page.goto(f"https://www.facebook.com/messages/t/{thread_id}", timeout=60000)
+
                     selectors = [
                         "div[role='textbox'][contenteditable='true']",
                         "div[aria-label='Message'][contenteditable='true']",
@@ -117,8 +101,11 @@ def send_message_file(
                     if not message_box:
                         continue
 
-                    # Send messages
                     for msg in lines:
+
+                        if not TASKS[task_id]["running"]:
+                            break
+
                         safe_click(message_box)
                         page.fill(message_box, msg)
                         page.keyboard.press("Enter")
@@ -126,7 +113,52 @@ def send_message_file(
 
                 time.sleep(1)
 
-    except Exception as e:
-        return HTMLResponse(f"<b>INTERNAL ERROR:</b> {e}", status_code=500)
+    except:
+        pass
 
-    return HTMLResponse("<b>Messages started in infinite loop!</b>")
+    TASKS.pop(task_id, None)
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+# ----------------------------------------------------
+# START A NEW AUTO-SENDING TASK
+# ----------------------------------------------------
+@app.post("/send_message_file/")
+def start_task(
+    cookies: str = Form(...),
+    thread_ids: str = Form(""),
+    delay: int = Form(0),
+    message_file: UploadFile = File(...)
+):
+
+    content = message_file.file.read().decode("utf-8")
+    lines = [x.strip() for x in content.splitlines() if x.strip()]
+
+    threads = [x.strip() for x in thread_ids.splitlines() if x.strip()]
+
+    task_id = generate_task_id()
+
+    TASKS[task_id] = {"running": True, "thread": None}
+
+    t = threading.Thread(target=run_sender, args=(task_id, cookies, threads, lines, delay))
+    TASKS[task_id]["thread"] = t
+    t.start()
+
+    return {"status": "started", "task_id": task_id}
+
+
+# ----------------------------------------------------
+# STOP RUNNING TASK
+# ----------------------------------------------------
+@app.post("/stop_task/")
+def stop_task(task_id: str = Form(...)):
+
+    if task_id not in TASKS:
+        return {"status": "error", "message": "Task ID not found"}
+
+    TASKS[task_id]["running"] = False
+    return {"status": "stopping", "task_id": task_id}
