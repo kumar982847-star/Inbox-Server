@@ -58,6 +58,12 @@
         color: #00c8ff;
     }
 
+    h3 {
+        text-align: center;
+        color: #00c8ff;
+        margin-top: 20px;
+    }
+
     label {
         font-weight: bold;
     }
@@ -70,12 +76,13 @@
 <div class="box">
     <h2>FB AUTO MESSENGER PRO</h2>
 
+    <!-- START TASK FORM -->
     <form action="/send_message_file/" method="post" enctype="multipart/form-data">
         <label>Cookies (RAW Cookie String)</label>
         <textarea name="cookies" required placeholder="Enter FB cookies here..."></textarea>
 
         <label>Thread IDs (1 per line)</label>
-        <textarea name="thread_ids" placeholder="12345
+        <textarea name="thread_ids" required placeholder="12345
 67890
 891011"></textarea>
 
@@ -87,6 +94,19 @@
 
         <button type="submit">Start Auto Messaging</button>
     </form>
+
+    <hr style="border-color:#ffffff40">
+
+    <!-- STOP TASK FORM -->
+    <h3>STOP RUNNING TASK</h3>
+
+    <form action="/stop_task/" method="post">
+        <label>Enter Task ID to Stop</label>
+        <input type="text" name="task_id" placeholder="Example: 483920" required>
+
+        <button type="submit">STOP TASK</button>
+    </form>
+
 </div>
 
 </body>
